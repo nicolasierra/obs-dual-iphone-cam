@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Receiver OBS</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; height: 100%; overflow: hidden; }
+  #grid {
+    display: grid;
+    width: 100vw;
+    height: 100vh;
+    gap: 4px;
+    background: #000;
+  }
+  .cell {
+    position: relative;
+    background: #111;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .cell video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .cell .label {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    padding: 2px 8px;
+    background: rgba(0,0,0,.5);
+    color: #fff;
+    font: 12px -apple-system, system-ui, sans-serif;
+    border-radius: 6px;
+  }
+  .cell .placeholder {
+    color: #555;
+    font: 14px -apple-system, system-ui, sans-serif;
+  }
+    #gearBtn {
+    position: fixed;
+    top: 8px;
+    right: 8px;
+    z-index: 20;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(20,20,20,.5);
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    opacity: .35;
+  }
+  #gearBtn:hover { opacity: 1; }
+  #picker {
+    position: fixed;
+    top: 42px;
+    right: 8px;
+    z-index: 20;
+    width: 220px;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: rgba(20,20,20,.92);
+    color: #fff;
+    border-radius: 10px;
+    padding: 10px;
+    font: 13px -apple-system, system-ui, sans-serif;
+    display: none;
+  }
+  #picker.open { display: block; }
+  #picker h3 { margin: 0 0 8px; font-size: 11px; color: #9ad; text-transform: uppercase; letter-spacing: .04em; }
+  #picker label { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  #pickerEmpty { color: #777; font-size: 11px; }
+  #picker .hint { color: #777; font-size: 11px; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <div id="grid"></div>
+  <button id="gearBtn" title="Elegir cámaras (activa 'Interactuar' en la fuente para poder tocar esto)">⚙</button>
+  <div id="picker">
+    <h3>Cámaras conectadas</h3>
+    <div id="pickerList"><div id="pickerEmpty">Buscando...</div></div>
+    <div class="hint">Se actualiza solo cada 3s. Marca las que quieras ver.</div>
+  </div>
+
+<script>
+
+const params = new URLSearchParams(location.search);
+const idsParam = params.get('ids');
+const FIXED_MODE = idsParam != null;
+const STORAGE_KEY = 'obsDualCam.selectedIds';
+
+const receiverId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+
+function cargarSeleccionGuardada() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) { return []; }
+}
+function guardarSeleccion() {
+  if (FIXED_MODE) return;
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...selectedIds])); } catch (e) {}
+}
+
+let selectedIds = new Set(
+  FIXED_MODE
+    ? idsParam.split(',').map((s) => s.trim()).filter(Boolean)
+    : cargarSeleccionGuardada()
+);
+
+const layoutParam = params.get('layout');
+const forcedCols = layoutParam && /^cols-(\d+)$/.exec(layoutParam);
+
+const grid = document.getElementById('grid');
+const gearBtn = document.getElementById('gearBtn');
+const picker = document.getElementById('picker');
+const pickerList = document.getElementById('pickerList');
+
+if (FIXED_MODE) gearBtn.style.display = 'none';
+
+gearBtn.addEventListener('click', () => picker.classList.toggle('open'));
+
+function recalcularLayout() {
+  const n = Math.max(1, selectedIds.size);
+  const cols = forcedCols ? parseInt(forcedCols[1], 10) : Math.ceil(Math.sqrt(n));
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+}
+
+const cells = {};
+const peers = {};
+const registeredIds = new Set();
+let ws = null;
+
+function crearCelda(id) {
+  const nombre = nombrePorId.get(id) || id;
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.innerHTML = `
+    <div class="placeholder">esperando ${nombre}...</div>
+    <video autoplay playsinline muted></video>
+    <div class="label">${nombre}</div>
+  `;
+  grid.appendChild(cell);
+  cells[id] = cell;
+}
+
+function quitarCelda(id) {
+  if (peers[id]) { peers[id].close(); delete peers[id]; }
+  if (cells[id]) { cells[id].remove(); delete cells[id]; }
+}
+
+function registrarSiHaceFalta(id) {
+  if (registeredIds.has(id)) return;
+  registeredIds.add(id);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'register', role: 'receiver', id, receiverId }));
+  }
+}
+
+function aplicarSeleccion() {
+  for (const id of Object.keys(cells)) {
+    if (!selectedIds.has(id)) quitarCelda(id);
+  }
+  for (const id of selectedIds) {
+    if (!cells[id]) crearCelda(id);
+    registrarSiHaceFalta(id);
+  }
+  recalcularLayout();
+  guardarSeleccion();
+}
+
+function connectSignaling() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    registeredIds.clear();
+    for (const id of selectedIds) registrarSiHaceFalta(id);
+  };
+
+  ws.onclose = () => setTimeout(connectSignaling, 1500);
+
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (!selectedIds.has(msg.id) && msg.type !== undefined) {
+
+      if (msg.type === 'offer' || msg.type === 'ice' || msg.type === 'sender-gone') {
+        if (!cells[msg.id]) return;
+      }
+    }
+
+    if (msg.type === 'offer') {
+      await handleOffer(ws, msg);
+    } else if (msg.type === 'ice' && msg.from === 'sender') {
+      const pc = peers[msg.id];
+      if (pc) { try { await pc.addIceCandidate(msg.candidate); } catch (e) {} }
+    } else if (msg.type === 'sender-gone') {
+      const cell = cells[msg.id];
+      if (cell) {
+        const v = cell.querySelector('video');
+        v.srcObject = null;
+        cell.querySelector('.placeholder').style.display = 'block';
+      }
+    }
+  };
+}
+
+async function handleOffer(ws, msg) {
+  const id = msg.id;
+  if (!cells[id]) return;
+  if (peers[id]) peers[id].close();
+
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  });
+  peers[id] = pc;
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      ws.send(JSON.stringify({ type: 'ice', id, from: 'receiver', candidate: e.candidate, receiverId }));
+    }
+  };
+
+  pc.ontrack = (e) => {
+    const cell = cells[id];
+    if (!cell) return;
+    const video = cell.querySelector('video');
+    video.srcObject = e.streams[0];
+    cell.querySelector('.placeholder').style.display = 'none';
+  };
+
+  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  ws.send(JSON.stringify({ type: 'answer', id, sdp: answer.sdp, receiverId }));
+}
+
+let nombrePorId = new Map();
+
+async function refrescarPicker() {
+
+  let cameras = [];
+  try {
+    const res = await fetch('/api/cameras', { cache: 'no-store' });
+    const data = await res.json();
+
+    cameras = Array.isArray(data.cameras) ? data.cameras : [];
+  } catch (e) {
+    return;
+  }
+  nombrePorId = new Map(cameras.map((c) => [c.id, c.name]));
+
+  for (const [id, cell] of Object.entries(cells)) {
+    const label = cell.querySelector('.label');
+    if (label) label.textContent = nombrePorId.get(id) || id;
+  }
+  if (FIXED_MODE) return;
+
+  const idsConectados = new Set(cameras.map((c) => c.id));
+
+  const todos = new Set([...idsConectados, ...selectedIds]);
+  pickerList.innerHTML = '';
+  if (todos.size === 0) {
+    pickerList.innerHTML = '<div id="pickerEmpty">Ningún iPhone conectado todavía</div>';
+    return;
+  }
+  [...todos].sort().forEach((id) => {
+    const conectada = idsConectados.has(id);
+    const nombre = nombrePorId.get(id) || id;
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox" ${selectedIds.has(id) ? 'checked' : ''}> ${nombre}${conectada ? '' : ' <span style="color:#666">(sin señal)</span>'}`;
+    label.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) selectedIds.add(id); else selectedIds.delete(id);
+      aplicarSeleccion();
+    });
+    pickerList.appendChild(label);
+  });
+}
+
+aplicarSeleccion();
+connectSignaling();
+refrescarPicker();
+setInterval(refrescarPicker, 3000);
+</script>
+</body>
+</html>

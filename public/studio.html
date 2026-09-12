@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Estudio — OBS Dual iPhone Cam</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #0b0b0b;
+    color: #fff;
+    margin: 0;
+    padding: 20px 16px 60px;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 11px; color: #9ad; text-transform: uppercase; letter-spacing: .04em; margin: 28px 0 10px; }
+  p.sub { color: #999; font-size: 14px; margin: 0 0 20px; }
+  .panel { background: #161616; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  button {
+    font-size: 14px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: none;
+    background: #2b7de9;
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary { background: #333; }
+  button.danger { background: #a11; }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type="text"], select {
+    font-size: 14px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid #333;
+    background: #0e0e0e;
+    color: #fff;
+  }
+  input[type="range"] { flex: 1; min-width: 70px; }
+  .tunnel-url { font: 11px ui-monospace, monospace; color: #7c7; word-break: break-all; }
+  .cams-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .cam-card { background: #161616; border-radius: 10px; overflow: hidden; }
+  .cam-card.offline { opacity: .55; }
+  .cam-video-wrap { position: relative; background: #000; aspect-ratio: 16/9; }
+  .cam-video-wrap video { width: 100%; height: 100%; object-fit: contain; }
+  .cam-video-wrap .placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #555; font-size: 14px;
+  }
+  .cam-body { padding: 10px 12px; }
+  .cam-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .cam-header input[type="text"] { flex: 1; font-weight: 600; }
+  .pin-badge {
+    background: #1b3a1b;
+    color: #7ee787;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    display: inline-block;
+  }
+  .pin-badge b { font-size: 18px; letter-spacing: .05em; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .status-dot.on { background: #22c55e; }
+  .status-dot.off { background: #666; }
+  .cam-controls .row { margin-bottom: 8px; font-size: 14px; }
+  .cam-controls label { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 130px; }
+  .cam-link {
+    font: 11px ui-monospace, monospace;
+    color: #7ad;
+    background: #0e0e0e;
+    padding: 6px 8px;
+    border-radius: 6px;
+    word-break: break-all;
+    display: block;
+    margin-top: 6px;
+    cursor: pointer;
+  }
+  .hint { font-size: 11px; color: #666; margin-top: 4px; }
+  #camsEmpty { color: #777; font-size: 14px; grid-column: 1/-1; }
+</style>
+</head>
+<body>
+  <h1>🎛 Estudio — control remoto</h1>
+  <p class="sub">Ajusta calidad, color y estabilización de cada iPhone a distancia, ponles nombre, y genera los enlaces de emisión — todo desde aquí.</p>
+
+  <h2>Túnel Cloudflare (acceso remoto)</h2>
+  <div class="panel">
+    <div class="row">
+      <button id="tunnelToggleBtn">Iniciar túnel</button>
+      <span id="tunnelStatus" class="tunnel-url">apagado</span>
+    </div>
+    <div class="hint">
+      Expone las páginas (cámaras, receiver, este estudio) con una URL pública HTTPS real, sin certificado autofirmado.
+      <b>Ojo:</b> esto ayuda a llegar a las páginas desde otra red, pero el vídeo en sí sigue siendo conexión directa
+      (WebRTC) entre el iPhone y este Mac — si el iPhone está en una red muy restringida (datos móviles con NAT
+      estricto), el vídeo puede no conectar igual sin un servidor TURN aparte (no incluido).
+    </div>
+  </div>
+
+  <h2>Cámaras</h2>
+  <div class="row" style="margin-bottom: 12px;">
+    <button id="addCamBtn" type="button">+ Añadir cámara</button>
+    <span class="hint" style="margin: 0;">Reserva un nombre y te da el enlace listo — la tarjeta queda "sin conexión" hasta que abras ese enlace en un iPhone.</span>
+  </div>
+  <div class="cams-grid" id="camsGrid">
+    <div id="camsEmpty">Buscando cámaras...</div>
+  </div>
+
+  <h2>Enlace de OBS</h2>
+  <div class="panel">
+    <div class="cam-link" id="receiverLink"></div>
+    <div class="hint">Pégalo en la fuente "Navegador" de OBS. El selector de cámaras vive dentro de esa misma página (⚙, con "Interactuar" activado).</div>
+  </div>
+
+  <footer style="text-align:center; font-size:11px; color:#555; margin:24px 0;">
+    <a href="https://github.com/nicolasierra/obs-dual-iphone-cam" style="color:#678;">obs-dual-iphone-cam</a>
+    por <a href="https://github.com/nicolasierra" style="color:#678;">Nicolás Sierra</a>
+  </footer>
+
+<script>
+const QUALITY_PRESETS = ['720', '1080', '1440'];
+const STAB_PRESETS = ['off', 'soft', 'medium', 'strong'];
+const HTTPS_PORT = 8443;
+const HTTP_PORT = 8080;
+
+const camsGrid = document.getElementById('camsGrid');
+const receiverLinkEl = document.getElementById('receiverLink');
+const tunnelToggleBtn = document.getElementById('tunnelToggleBtn');
+const tunnelStatusEl = document.getElementById('tunnelStatus');
+const addCamBtn = document.getElementById('addCamBtn');
+
+const receiverId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+let ws = null;
+const peers = {};
+const registeredIds = new Set();
+let tunnelUrl = null;
+
+function origenSender(host) { return `https://${host}:${HTTPS_PORT}`; }
+function origenHttp(host) { return `http://${host}:${HTTP_PORT}`; }
+
+function renderLinks() {
+  const host = location.hostname;
+  receiverLinkEl.textContent = `${origenHttp(host)}/receiver.html`;
+  if (tunnelUrl) {
+    receiverLinkEl.textContent += `  ·  (por túnel: ${tunnelUrl}/receiver.html)`;
+  }
+}
+
+async function refrescarTunnel() {
+  try {
+    const res = await fetch('/api/tunnel/status');
+    const data = await res.json();
+    tunnelUrl = data.url || null;
+    if (data.error) {
+
+      tunnelStatusEl.textContent = '⚠ ' + data.error;
+      tunnelStatusEl.style.color = '#e02424';
+      tunnelToggleBtn.textContent = 'Iniciar túnel';
+    } else if (data.running && data.starting) {
+      tunnelStatusEl.textContent = 'iniciando...';
+      tunnelStatusEl.style.color = '';
+      tunnelToggleBtn.textContent = 'Detener túnel';
+    } else if (data.running && tunnelUrl) {
+      tunnelStatusEl.textContent = tunnelUrl;
+      tunnelStatusEl.style.color = '';
+      tunnelToggleBtn.textContent = 'Detener túnel';
+    } else {
+      tunnelStatusEl.textContent = 'apagado';
+      tunnelStatusEl.style.color = '';
+      tunnelToggleBtn.textContent = 'Iniciar túnel';
+    }
+    renderLinks();
+  } catch (e) {}
+}
+tunnelToggleBtn.addEventListener('click', async () => {
+  tunnelToggleBtn.disabled = true;
+  const activo = tunnelToggleBtn.textContent === 'Detener túnel';
+  await fetch(activo ? '/api/tunnel/stop' : '/api/tunnel/start', { method: 'POST' });
+  await refrescarTunnel();
+  tunnelToggleBtn.disabled = false;
+});
+
+function connectSignaling() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => {
+    registeredIds.clear();
+    Object.keys(cardsById).forEach((id) => registrar(id));
+  };
+  ws.onclose = () => setTimeout(connectSignaling, 1500);
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    const card = cardsById[msg.id];
+    if (msg.type === 'offer') {
+      if (!card) return;
+      await handleOffer(msg);
+    } else if (msg.type === 'ice' && msg.from === 'sender') {
+      const pc = peers[msg.id];
+      if (pc) { try { await pc.addIceCandidate(msg.candidate); } catch (e) {} }
+    } else if (msg.type === 'sender-gone') {
+      if (card) { card.video.srcObject = null; card.placeholder.style.display = 'flex'; }
+    }
+  };
+}
+
+function registrar(id) {
+  if (registeredIds.has(id)) return;
+  registeredIds.add(id);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'register', role: 'receiver', id, receiverId }));
+  }
+}
+
+async function handleOffer(msg) {
+  const id = msg.id;
+  if (peers[id]) peers[id].close();
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  peers[id] = pc;
+  pc.onicecandidate = (e) => {
+    if (e.candidate) ws.send(JSON.stringify({ type: 'ice', id, from: 'receiver', candidate: e.candidate, receiverId }));
+  };
+  pc.ontrack = (e) => {
+    const card = cardsById[id];
+    if (!card) return;
+    card.video.srcObject = e.streams[0];
+    card.placeholder.style.display = 'none';
+  };
+  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  ws.send(JSON.stringify({ type: 'answer', id, sdp: answer.sdp, receiverId }));
+}
+
+function enviarControl(id, settings) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'control', id, settings }));
+  }
+}
+
+const cardsById = {};
+
+function crearTarjeta(cam) {
+  const el = document.createElement('div');
+  el.className = 'cam-card' + (cam.connected ? '' : ' offline');
+  el.innerHTML = `
+    <div class="cam-video-wrap">
+      <video autoplay playsinline muted></video>
+      <div class="placeholder">${cam.connected ? 'conectando...' : 'sin conexión'}</div>
+    </div>
+    <div class="cam-body">
+      <div class="cam-header">
+        <span class="status-dot ${cam.connected ? 'on' : 'off'}"></span>
+        <input type="text" value="${cam.name}" maxlength="60" />
+        <button type="button" class="secondary deleteCamBtn" title="Quitar (solo si nunca se conectó)">🗑</button>
+      </div>
+      ${cam.pin ? `<div class="pin-badge">PIN para este iPhone: <b>${cam.pin}</b></div>` : ''}
+      <div class="cam-controls">
+        <div class="row">
+          <label>Calidad
+            <select class="qualitySelect">
+              ${QUALITY_PRESETS.map((q) => `<option value="${q}">${q}p</option>`).join('')}
+            </select>
+          </label>
+          <label>Estab.
+            <select class="stabSelect">
+              <option value="off">Desact.</option>
+              <option value="soft">Suave</option>
+              <option value="medium" selected>Media</option>
+              <option value="strong">Fuerte</option>
+            </select>
+          </label>
+        </div>
+        <div class="row"><label>Brillo <input type="range" class="brightRange" min="50" max="150" value="100" /></label></div>
+        <div class="row"><label>Contraste <input type="range" class="contrastRange" min="50" max="150" value="100" /></label></div>
+        <div class="row"><label>Saturación <input type="range" class="satRange" min="0" max="200" value="100" /></label></div>
+        <div class="row"><label>Enfoque (0=cerca, 100=lejos) <input type="range" class="focusRange" min="0" max="100" value="50" /></label></div>
+        <div class="row"><label>Exposición (0=oscuro, 100=claro) <input type="range" class="expoRange" min="0" max="100" value="50" /></label></div>
+        <div class="hint">Enfoque/exposición solo funcionan si ESE iPhone los soporta (muchos no lo exponen) — se ignoran sin avisar si no.</div>
+        <div class="row">
+          <button type="button" class="secondary resetColorBtn">↺ Restablecer color</button>
+          <button type="button" class="secondary wbAutoBtn">⚪ Balance de blancos auto</button>
+        </div>
+      </div>
+      <div class="cam-link" data-kind="sender"></div>
+    </div>
+  `;
+
+  const video = el.querySelector('video');
+  const placeholder = el.querySelector('.placeholder');
+  const nameInput = el.querySelector('input[type="text"]');
+  const dot = el.querySelector('.status-dot');
+  const qualitySelect = el.querySelector('.qualitySelect');
+  const stabSelect = el.querySelector('.stabSelect');
+  const brightRange = el.querySelector('.brightRange');
+  const contrastRange = el.querySelector('.contrastRange');
+  const satRange = el.querySelector('.satRange');
+  const focusRange = el.querySelector('.focusRange');
+  const expoRange = el.querySelector('.expoRange');
+  const resetColorBtn = el.querySelector('.resetColorBtn');
+  const wbAutoBtn = el.querySelector('.wbAutoBtn');
+  const deleteCamBtn = el.querySelector('.deleteCamBtn');
+  const linkEl = el.querySelector('.cam-link');
+
+  const s = cam.settings || {};
+  qualitySelect.value = s.quality || '1080';
+  stabSelect.value = s.stab || 'medium';
+  if (s.brightness != null) brightRange.value = s.brightness;
+  if (s.contrast != null) contrastRange.value = s.contrast;
+  if (s.saturation != null) satRange.value = s.saturation;
+  if (s.focusDistance != null) focusRange.value = s.focusDistance;
+  if (s.exposure != null) expoRange.value = s.exposure;
+
+  async function guardarNombre() {
+    const nuevo = nameInput.value.trim();
+    await fetch('/api/cameras/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: cam.id, name: nuevo }),
+    }).catch(() => {});
+  }
+  nameInput.addEventListener('blur', guardarNombre);
+  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') nameInput.blur(); });
+
+  function mandarCalidad() { enviarControl(cam.id, { quality: qualitySelect.value }); }
+  function mandarStab() { enviarControl(cam.id, { stab: stabSelect.value }); }
+  function mandarColor() {
+    enviarControl(cam.id, {
+      brightness: Number(brightRange.value),
+      contrast: Number(contrastRange.value),
+      saturation: Number(satRange.value),
+    });
+  }
+  qualitySelect.addEventListener('change', mandarCalidad);
+  stabSelect.addEventListener('change', mandarStab);
+  [brightRange, contrastRange, satRange].forEach((r) => r.addEventListener('input', mandarColor));
+  focusRange.addEventListener('input', () => enviarControl(cam.id, { focusDistance: Number(focusRange.value) }));
+  expoRange.addEventListener('input', () => enviarControl(cam.id, { exposure: Number(expoRange.value) }));
+  resetColorBtn.addEventListener('click', () => {
+    brightRange.value = 100; contrastRange.value = 100; satRange.value = 100;
+    mandarColor();
+  });
+
+  wbAutoBtn.addEventListener('click', () => enviarControl(cam.id, { whiteBalance: 'auto' }));
+
+  deleteCamBtn.addEventListener('click', async () => {
+    const pregunta = cam.connected
+      ? `"${cam.name}" está conectada ahora mismo — solo se le puede quitar el nombre (volverá a mostrarse como "${cam.id}"). ¿Continuar?`
+      : `¿Quitar la cámara reservada "${cam.name}"?`;
+    if (!confirm(pregunta)) return;
+    await fetch('/api/cameras/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: cam.id, name: '' }),
+    }).catch(() => {});
+    await refrescarCamaras();
+  });
+
+  linkEl.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(linkEl.dataset.url); linkEl.textContent = '¡copiado!'; setTimeout(() => actualizarLink(cam.id), 1200); } catch (e) {}
+  });
+
+  camsGrid.appendChild(el);
+  cardsById[cam.id] = { el, video, placeholder, nameInput, dot, qualitySelect, stabSelect, brightRange, contrastRange, satRange, linkEl };
+  actualizarLink(cam.id);
+}
+
+function actualizarLink(id) {
+  const card = cardsById[id];
+  if (!card) return;
+  const host = location.hostname;
+  let url = `${origenSender(host)}/sender.html`;
+  if (tunnelUrl) url = `${tunnelUrl}/sender.html`;
+  card.linkEl.dataset.url = url;
+  card.linkEl.textContent = url;
+}
+
+function actualizarEstadoTarjeta(cam) {
+  const card = cardsById[cam.id];
+  if (!card) return;
+  card.el.classList.toggle('offline', !cam.connected);
+  card.dot.classList.toggle('on', cam.connected);
+  card.dot.classList.toggle('off', !cam.connected);
+  if (document.activeElement !== card.nameInput) card.nameInput.value = cam.name;
+  if (!cam.connected) { card.placeholder.style.display = 'flex'; card.placeholder.textContent = 'sin conexión'; }
+}
+
+function quitarTarjeta(id) {
+  if (peers[id]) { peers[id].close(); delete peers[id]; }
+  if (cardsById[id]) { cardsById[id].el.remove(); delete cardsById[id]; }
+  registeredIds.delete(id);
+}
+
+async function refrescarCamaras() {
+  let cameras = [];
+  try {
+    const res = await fetch('/api/cameras', { cache: 'no-store' });
+    const data = await res.json();
+    cameras = Array.isArray(data.cameras) ? data.cameras : [];
+  } catch (e) { return; }
+
+  const idsActuales = new Set(cameras.map((c) => c.id));
+  for (const id of Object.keys(cardsById)) {
+    if (!idsActuales.has(id)) quitarTarjeta(id);
+  }
+
+  const empty = document.getElementById('camsEmpty');
+  if (cameras.length === 0) {
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+
+  cameras.forEach((cam) => {
+    if (!cardsById[cam.id]) crearTarjeta(cam);
+    else { actualizarEstadoTarjeta(cam); actualizarLink(cam.id); }
+    registrar(cam.id);
+  });
+}
+
+addCamBtn.addEventListener('click', async () => {
+  addCamBtn.disabled = true;
+  try {
+    await fetch('/api/cameras/add', { method: 'POST' });
+    await refrescarCamaras();
+  } finally {
+    addCamBtn.disabled = false;
+  }
+});
+
+connectSignaling();
+refrescarCamaras();
+refrescarTunnel();
+setInterval(refrescarCamaras, 3000);
+setInterval(refrescarTunnel, 4000);
+renderLinks();
+</script>
+</body>
+</html>

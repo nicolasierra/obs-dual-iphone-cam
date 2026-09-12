@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Cámara para OBS</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background: #000; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+  }
+  #stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: #000;
+    overflow: hidden;
+  }
+  video, canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  #rawVideo { visibility: hidden; }
+  #panel {
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    background: #111;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 46vh;
+    overflow-y: auto;
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  button {
+    font-size: 16px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: none;
+    background: #2b7de9;
+    color: #fff;
+    font-weight: 600;
+  }
+  button.secondary { background: #333; }
+  button:disabled { opacity: .5; }
+  #status { font-size: 12px; color: #9ad; }
+  #stats { font-size: 12px; color: #7c7; font-family: ui-monospace, monospace; }
+  label { font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  select { font-size: 15px; padding: 6px; border-radius: 6px; }
+  .hint { font-size: 12px; color: #888; }
+  #ajustesLocales summary { color: #9ad; cursor: pointer; margin-bottom: 6px; }
+  #ajustesLocales[open] summary { margin-bottom: 10px; }
+  input[type="range"] { flex: 1; min-width: 90px; max-width: 160px; }
+  #brightVal, #contrastVal, #satVal { font-variant-numeric: tabular-nums; min-width: 3.5em; }
+    #pinScreen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 24px;
+    text-align: center;
+  }
+  #pinScreen input {
+    font-size: 28px;
+    letter-spacing: .3em;
+    text-align: center;
+    width: 5.5em;
+    padding: 10px;
+    border-radius: 10px;
+    border: none;
+  }
+  #pinError { color: #f66; font-size: 13px; min-height: 1.2em; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="pinScreen">
+    <h1 style="font-size: 18px; margin: 0;">📷 Cámara para OBS</h1>
+    <p style="color: #999; font-size: 13px; margin: 0;">Ingresa el PIN de 4 dígitos que te pasaron desde el estudio.</p>
+    <input type="tel" inputmode="numeric" pattern="[0-9]*" id="pinInput" maxlength="4" placeholder="----" autofocus />
+    <button id="pinSubmitBtn">Entrar</button>
+    <div id="pinError"></div>
+  </div>
+  <div id="stage" class="hidden">
+    <video id="rawVideo" playsinline muted autoplay></video>
+    <canvas id="outCanvas"></canvas>
+  </div>
+  <div id="panel" class="hidden">
+    <div class="row">
+      <div>ID: <b id="idLabel">-</b></div>
+      <div id="status">desconectado</div>
+    </div>
+    <div class="row">
+      <div id="stats">-</div>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="frontToggle" /> Cámara frontal</label>
+    </div>
+
+    <details id="ajustesLocales">
+      <summary>Ajustes avanzados (normalmente desde el estudio)</summary>
+      <div class="row">
+        <label>Calidad
+          <select id="qualitySelect">
+            <option value="720">720p · 3 Mbps</option>
+            <option value="1080" selected>1080p · 6 Mbps</option>
+            <option value="1440">1440p · 10 Mbps</option>
+          </select>
+        </label>
+        <label>Estabilización
+          <select id="stabSelect">
+            <option value="off">Desactivada</option>
+            <option value="soft">Suave</option>
+            <option value="medium" selected>Media</option>
+            <option value="strong">Fuerte</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Brillo <input type="range" id="brightRange" min="50" max="150" value="100" /> <span id="brightVal">100%</span></label>
+        <button id="colorResetBtn" class="secondary" type="button" title="Volver brillo/contraste/saturación a 100%">↺ Restablecer</button>
+      </div>
+      <div class="row">
+        <label>Contraste <input type="range" id="contrastRange" min="50" max="150" value="100" /> <span id="contrastVal">100%</span></label>
+      </div>
+      <div class="row">
+        <label>Saturación <input type="range" id="satRange" min="0" max="200" value="100" /> <span id="satVal">100%</span></label>
+      </div>
+
+      <div class="row" id="focusRow" style="display:none;">
+        <label>Enfoque (0=cerca, 100=lejos) <input type="range" id="focusRange" min="0" max="100" value="50" /></label>
+      </div>
+      <div class="hint" id="focusHint" style="display:none;">Este dispositivo no soporta enfoque manual por navegador — se deja en foco automático.</div>
+
+      <div class="row" id="expoRow" style="display:none;">
+        <label>Exposición (0=oscuro, 100=claro) <input type="range" id="expoRange" min="0" max="100" value="50" /></label>
+      </div>
+      <div class="hint" id="expoHint" style="display:none;">Este dispositivo no soporta exposición manual por navegador.</div>
+
+      <div class="row" id="wbRow" style="display:none;">
+        <button id="wbBtn" class="secondary" type="button">⚪ Balance de blancos automático</button>
+      </div>
+      <div class="hint" id="wbHint" style="display:none;">Este dispositivo no soporta ajustar el balance de blancos por navegador.</div>
+
+      <div class="hint" id="capsInfo" style="color:#69c;"></div>
+    </details>
+    <div class="row">
+      <button id="startBtn" disabled>Esperando PIN...</button>
+      <button id="stopBtn" class="secondary" disabled>Detener</button>
+    </div>
+    <div class="hint">Normalmente Calidad/Estabilización/Color se controlan desde el estudio (studio.html). Los de aquí arriba son de respaldo — se aplican en vivo igual, sin Detener/Iniciar. Solo "Cámara frontal" sí necesita reiniciar (es otra cámara física).</div>
+    <footer style="text-align:center; font-size:11px; color:#555; margin-top:8px;">
+      <a href="https://github.com/nicolasierra/obs-dual-iphone-cam" style="color:#678;">obs-dual-iphone-cam</a>
+      por <a href="https://github.com/nicolasierra" style="color:#678;">Nicolás Sierra</a>
+    </footer>
+  </div>
+
+<script>
+
+let camId = null;
+
+const pinScreen = document.getElementById('pinScreen');
+const pinInput = document.getElementById('pinInput');
+const pinSubmitBtn = document.getElementById('pinSubmitBtn');
+const pinError = document.getElementById('pinError');
+const stageEl = document.getElementById('stage');
+const panelEl = document.getElementById('panel');
+
+let ajustesGuardados = null;
+
+async function mostrarNombreYHabilitar() {
+  pinScreen.classList.add('hidden');
+  stageEl.classList.remove('hidden');
+  panelEl.classList.remove('hidden');
+  document.getElementById('idLabel').textContent = camId;
+  startBtn.disabled = false;
+  startBtn.textContent = 'Iniciar cámara y conectar';
+
+  try {
+    const res = await fetch('/api/cameras');
+    const data = await res.json();
+    const cam = (data.cameras || []).find((c) => c.id === camId);
+    if (cam && cam.name && cam.name !== camId) {
+      document.getElementById('idLabel').textContent = `${camId} (${cam.name})`;
+    }
+    if (cam && cam.settings) {
+      ajustesGuardados = cam.settings;
+      const s = cam.settings;
+      if (s.quality && QUALITY_PRESETS[s.quality]) qualitySelect.value = s.quality;
+      if (s.stab && Object.prototype.hasOwnProperty.call(STAB_PRESETS, s.stab)) stabSelect.value = s.stab;
+      if (s.brightness != null) brightRange.value = s.brightness;
+      if (s.contrast != null) contrastRange.value = s.contrast;
+      if (s.saturation != null) satRange.value = s.saturation;
+      updateColorLabels();
+    }
+  } catch (e) {}
+}
+
+function persistirAjustes(parcial) {
+  if (!camId) return;
+  fetch('/api/cameras/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: camId, settings: parcial }),
+  }).catch(() => {});
+}
+
+async function intentarPin() {
+  const pin = pinInput.value.trim();
+  if (!/^\d{4}$/.test(pin)) {
+    pinError.textContent = 'El PIN son 4 dígitos.';
+    return;
+  }
+  pinSubmitBtn.disabled = true;
+  pinError.textContent = '';
+  try {
+    const res = await fetch('/api/cameras/resolve-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    });
+    if (!res.ok) {
+      pinError.textContent = 'PIN incorrecto. Pídelo de nuevo desde el estudio.';
+      pinInput.value = '';
+      pinInput.focus();
+      return;
+    }
+    const data = await res.json();
+    camId = data.id;
+    await mostrarNombreYHabilitar();
+  } catch (e) {
+    pinError.textContent = 'No se pudo conectar con el servidor. Reintenta.';
+  } finally {
+    pinSubmitBtn.disabled = false;
+  }
+}
+pinSubmitBtn.addEventListener('click', intentarPin);
+pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') intentarPin(); });
+
+const rawVideo = document.getElementById('rawVideo');
+const outCanvas = document.getElementById('outCanvas');
+const ctx = outCanvas.getContext('2d', { alpha: false });
+ctx.imageSmoothingEnabled = true;
+if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+
+const statusEl = document.getElementById('status');
+const statsEl = document.getElementById('stats');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const frontToggle = document.getElementById('frontToggle');
+const qualitySelect = document.getElementById('qualitySelect');
+const stabSelect = document.getElementById('stabSelect');
+const brightRange = document.getElementById('brightRange');
+const contrastRange = document.getElementById('contrastRange');
+const satRange = document.getElementById('satRange');
+const focusRow = document.getElementById('focusRow');
+const focusRange = document.getElementById('focusRange');
+const focusHint = document.getElementById('focusHint');
+let focusRangeReal = null;
+const expoRow = document.getElementById('expoRow');
+const expoRange = document.getElementById('expoRange');
+const expoHint = document.getElementById('expoHint');
+let expoRangeReal = null;
+const wbRow = document.getElementById('wbRow');
+const wbBtn = document.getElementById('wbBtn');
+const wbHint = document.getElementById('wbHint');
+let wbModoSoportado = null;
+const capsInfo = document.getElementById('capsInfo');
+const brightVal = document.getElementById('brightVal');
+const contrastVal = document.getElementById('contrastVal');
+const satVal = document.getElementById('satVal');
+const colorResetBtn = document.getElementById('colorResetBtn');
+
+const QUALITY_PRESETS = {
+  '720':  { width: 1280, height: 720,  bitrate: 3_000_000 },
+  '1080': { width: 1920, height: 1080, bitrate: 6_000_000 },
+  '1440': { width: 2560, height: 1440, bitrate: 10_000_000 },
+};
+
+const STAB_PRESETS = {
+  off:    null,
+  soft:   { marginRatio: 0.07, gain: 1.6, tau: 0.55, smoothTau: 0.10 },
+  medium: { marginRatio: 0.12, gain: 2.3, tau: 0.35, smoothTau: 0.07 },
+  strong: { marginRatio: 0.18, gain: 3.1, tau: 0.22, smoothTau: 0.05 },
+};
+
+let ws = null;
+
+const peerConnections = new Map();
+const reintentandoOferta = new Set();
+let localStream = null;
+let outStream = null;
+let rafId = null;
+let statsInterval = null;
+
+const STAB = {
+  cfg: STAB_PRESETS.medium,
+  offsetX: 0, offsetY: 0,
+  visX: 0, visY: 0,
+  lastMotionT: null,
+  lastFrameT: null,
+};
+
+function initMotion() {
+  const start = () => {
+    window.addEventListener('devicemotion', (e) => {
+      if (!STAB.cfg) return;
+      const now = performance.now();
+      if (STAB.lastMotionT == null) { STAB.lastMotionT = now; return; }
+      const dt = Math.min((now - STAB.lastMotionT) / 1000, 0.1);
+      STAB.lastMotionT = now;
+      const rr = e.rotationRate || {};
+      const beta = rr.beta || 0;
+      const gamma = rr.gamma || 0;
+
+      const decay = Math.exp(-dt / STAB.cfg.tau);
+      STAB.offsetX = STAB.offsetX * decay - gamma * dt * STAB.cfg.gain;
+      STAB.offsetY = STAB.offsetY * decay + beta * dt * STAB.cfg.gain;
+    });
+  };
+
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission().then((res) => {
+      if (res === 'granted') start();
+      else console.warn('Permiso de movimiento denegado; estabilización limitada.');
+    }).catch(() => {});
+  } else {
+    start();
+  }
+}
+
+function detectarSoporteFilterCanvas() {
+  try {
+    const test = document.createElement('canvas');
+    test.width = 1; test.height = 1;
+    const tctx = test.getContext('2d');
+    if (!('filter' in tctx)) return false;
+    tctx.fillStyle = 'rgb(128,128,128)';
+    tctx.fillRect(0, 0, 1, 1);
+    tctx.filter = 'brightness(200%)';
+    tctx.fillRect(0, 0, 1, 1);
+    return tctx.getImageData(0, 0, 1, 1).data[0] > 200;
+  } catch (e) {
+    return false;
+  }
+}
+const FILTER_CANVAS_SOPORTADO = detectarSoporteFilterCanvas();
+
+function aplicarColorManual(vw, vh, b, c, s) {
+  const img = ctx.getImageData(0, 0, vw, vh);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i], g = d[i + 1], bl = d[i + 2];
+    const gray = 0.299 * r + 0.587 * g + 0.114 * bl;
+    r = gray + (r - gray) * s;
+    g = gray + (g - gray) * s;
+    bl = gray + (bl - gray) * s;
+    r = (r - 128) * c + 128;
+    g = (g - 128) * c + 128;
+    bl = (bl - 128) * c + 128;
+    r *= b; g *= b; bl *= b;
+    d[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+    d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+    d[i + 2] = bl < 0 ? 0 : bl > 255 ? 255 : bl;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function drawLoop() {
+  const vw = rawVideo.videoWidth, vh = rawVideo.videoHeight;
+  const now = performance.now();
+  const frameDt = STAB.lastFrameT == null ? 1 / 30 : Math.min((now - STAB.lastFrameT) / 1000, 0.1);
+  STAB.lastFrameT = now;
+
+  if (vw && vh) {
+    if (outCanvas.width !== vw || outCanvas.height !== vh) {
+      outCanvas.width = vw;
+      outCanvas.height = vh;
+    }
+    const bNum = Number(brightRange.value) / 100;
+    const cNum = Number(contrastRange.value) / 100;
+    const sNum = Number(satRange.value) / 100;
+    const colorEsNeutro = bNum === 1 && cNum === 1 && sNum === 1;
+
+    ctx.filter = FILTER_CANVAS_SOPORTADO
+      ? `brightness(${brightRange.value}%) contrast(${contrastRange.value}%) saturate(${satRange.value}%)`
+      : 'none';
+    if (STAB.cfg) {
+
+      const alpha = 1 - Math.exp(-frameDt / STAB.cfg.smoothTau);
+      STAB.visX += (STAB.offsetX - STAB.visX) * alpha;
+      STAB.visY += (STAB.offsetY - STAB.visY) * alpha;
+
+      const mx = vw * STAB.cfg.marginRatio;
+      const my = vh * STAB.cfg.marginRatio;
+      const ox = Math.max(-mx, Math.min(mx, STAB.visX * mx));
+      const oy = Math.max(-my, Math.min(my, STAB.visY * my));
+
+      const sx = mx + ox, sy = my + oy;
+      const sw = vw - mx * 2, sh = vh - my * 2;
+      ctx.drawImage(rawVideo, sx, sy, sw, sh, 0, 0, vw, vh);
+    } else {
+      ctx.drawImage(rawVideo, 0, 0, vw, vh);
+    }
+
+    if (!FILTER_CANVAS_SOPORTADO && !colorEsNeutro) {
+      aplicarColorManual(vw, vh, bNum, cNum, sNum);
+    }
+  }
+  rafId = requestAnimationFrame(drawLoop);
+}
+
+async function startCamera() {
+  const q = QUALITY_PRESETS[qualitySelect.value];
+  const constraints = {
+    audio: false,
+    video: {
+      facingMode: { ideal: frontToggle.checked ? 'user' : 'environment' },
+      width: { ideal: q.width, min: 640 },
+      height: { ideal: q.height, min: 480 },
+      frameRate: { ideal: 30, min: 24 },
+    },
+  };
+  localStream = await navigator.mediaDevices.getUserMedia(constraints);
+  rawVideo.srcObject = localStream;
+  await rawVideo.play();
+
+  const track = localStream.getVideoTracks()[0];
+  const settings = track.getSettings ? track.getSettings() : {};
+  statusEl.textContent = `cámara: ${settings.width || '?'}x${settings.height || '?'} @ ${Math.round(settings.frameRate || 0)}fps`;
+
+  focusRangeReal = null;
+  try {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.focusMode && caps.focusMode.includes('manual') && caps.focusDistance) {
+      focusRangeReal = { min: caps.focusDistance.min, max: caps.focusDistance.max };
+      focusRow.style.display = '';
+      focusHint.style.display = 'none';
+    } else {
+      focusRow.style.display = 'none';
+      focusHint.style.display = '';
+    }
+  } catch (e) {
+    focusRow.style.display = 'none';
+    focusHint.style.display = '';
+  }
+
+  wbModoSoportado = null;
+  try {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('single-shot')) {
+      wbModoSoportado = 'single-shot';
+    } else if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) {
+      wbModoSoportado = 'continuous';
+    }
+    wbRow.style.display = wbModoSoportado ? '' : 'none';
+    wbHint.style.display = wbModoSoportado ? 'none' : '';
+  } catch (e) {
+    wbRow.style.display = 'none';
+    wbHint.style.display = '';
+  }
+
+  expoRangeReal = null;
+  try {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureCompensation) {
+      expoRangeReal = { min: caps.exposureCompensation.min, max: caps.exposureCompensation.max };
+      expoRow.style.display = '';
+      expoHint.style.display = 'none';
+    } else {
+      expoRow.style.display = 'none';
+      expoHint.style.display = '';
+    }
+  } catch (e) {
+    expoRow.style.display = 'none';
+    expoHint.style.display = '';
+  }
+
+  try {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    capsInfo.textContent =
+      `Este dispositivo soporta — enfoque manual: ${focusRangeReal ? 'sí' : 'no'} · ` +
+      `exposición manual: ${expoRangeReal ? 'sí' : 'no'} · ` +
+      `balance de blancos: ${wbModoSoportado ? `sí (${wbModoSoportado})` : 'no'}` +
+      (caps.whiteBalanceMode ? ` [navegador reporta: ${caps.whiteBalanceMode.join(', ')}]` : '');
+  } catch (e) {
+    capsInfo.textContent = '';
+  }
+
+  if (ajustesGuardados) {
+    if (ajustesGuardados.focusDistance != null && focusRangeReal) {
+      focusRange.value = ajustesGuardados.focusDistance;
+      aplicarEnfoque(ajustesGuardados.focusDistance);
+    }
+    if (ajustesGuardados.exposure != null && expoRangeReal) {
+      expoRange.value = ajustesGuardados.exposure;
+      aplicarExposicion(ajustesGuardados.exposure);
+    }
+  }
+
+  STAB.cfg = STAB_PRESETS[stabSelect.value];
+  STAB.offsetX = STAB.offsetY = STAB.visX = STAB.visY = 0;
+  STAB.lastMotionT = STAB.lastFrameT = null;
+
+  initMotion();
+  drawLoop();
+  outStream = outCanvas.captureStream(30);
+}
+
+let transmitiendo = false;
+let reintentoProgramado = false;
+
+function programarReconexion() {
+  if (!transmitiendo || reintentoProgramado) return;
+  reintentoProgramado = true;
+  statusEl.textContent = 'conexión perdida, reintentando...';
+  setTimeout(() => {
+    reintentoProgramado = false;
+    if (transmitiendo) connectSignaling().catch(() => {});
+  }, 2000);
+}
+
+function connectSignaling() {
+  return new Promise((resolve, reject) => {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    ws.onopen = () => {
+      statusEl.textContent = 'señalización conectada, esperando receiver...';
+      ws.send(JSON.stringify({ type: 'register', role: 'sender', id: camId }));
+      resolve();
+    };
+    ws.onerror = reject;
+    ws.onclose = () => {
+      statusEl.textContent = transmitiendo ? 'conexión perdida, reintentando...' : 'desconectado';
+      programarReconexion();
+    };
+    ws.onmessage = async (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'request-offer') {
+
+        await makeOffer(msg.receiverId);
+      } else if (msg.type === 'answer') {
+        const entry = peerConnections.get(msg.receiverId);
+        if (entry) {
+          await entry.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+          statusEl.textContent = 'conectado ✔';
+        }
+      } else if (msg.type === 'ice' && msg.from === 'receiver') {
+        const entry = peerConnections.get(msg.receiverId);
+        if (entry) { try { await entry.pc.addIceCandidate(msg.candidate); } catch (e) {} }
+      } else if (msg.type === 'sender-gone') {
+
+      } else if (msg.type === 'control') {
+        aplicarControlRemoto(msg.settings || {});
+      }
+    };
+  });
+}
+
+function preferH264(transceiver) {
+  try {
+    if (typeof transceiver.setCodecPreferences !== 'function') return;
+    const caps = RTCRtpSender.getCapabilities('video');
+    if (!caps) return;
+    const h264 = caps.codecs.filter((c) => /H264/i.test(c.mimeType));
+    const rest = caps.codecs.filter((c) => !/H264/i.test(c.mimeType));
+    if (h264.length) transceiver.setCodecPreferences([...h264, ...rest]);
+  } catch (e) {
+
+  }
+}
+
+async function applyEncodingParams(sender, bitrateBps) {
+  try {
+    const p = sender.getParameters();
+    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+    p.encodings[0].maxBitrate = bitrateBps;
+    p.encodings[0].priority = 'high';
+    p.degradationPreference = 'maintain-resolution';
+    await sender.setParameters(p);
+  } catch (e) {
+    console.warn('No se pudieron ajustar parámetros de codificación:', e);
+  }
+}
+
+async function aplicarEnfoque(valor0a100) {
+  if (!focusRangeReal || !localStream) return;
+  const track = localStream.getVideoTracks()[0];
+  const { min, max } = focusRangeReal;
+  const distancia = min + ((max - min) * valor0a100) / 100;
+  try {
+    await track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: distancia }] });
+  } catch (e) {
+    console.error('No se pudo aplicar el enfoque manual:', e);
+  }
+}
+focusRange.addEventListener('input', () => aplicarEnfoque(Number(focusRange.value)));
+
+focusRange.addEventListener('change', () => persistirAjustes({ focusDistance: Number(focusRange.value) }));
+
+async function aplicarExposicion(valor0a100) {
+  if (!expoRangeReal || !localStream) return;
+  const track = localStream.getVideoTracks()[0];
+  const { min, max } = expoRangeReal;
+  const compensacion = min + ((max - min) * valor0a100) / 100;
+  try {
+    await track.applyConstraints({ advanced: [{ exposureMode: 'manual', exposureCompensation: compensacion }] });
+  } catch (e) {
+    console.error('No se pudo aplicar la exposición manual:', e);
+  }
+}
+expoRange.addEventListener('input', () => aplicarExposicion(Number(expoRange.value)));
+expoRange.addEventListener('change', () => persistirAjustes({ exposure: Number(expoRange.value) }));
+
+async function aplicarBalanceBlancos() {
+  if (!wbModoSoportado || !localStream) return;
+  const track = localStream.getVideoTracks()[0];
+  wbBtn.disabled = true;
+  wbBtn.textContent = 'Recalibrando...';
+  try {
+    if (wbModoSoportado === 'single-shot') {
+      await track.applyConstraints({ advanced: [{ whiteBalanceMode: 'single-shot' }] });
+    } else {
+
+      await track.applyConstraints({ advanced: [{ whiteBalanceMode: 'manual' }] });
+      await new Promise((r) => setTimeout(r, 120));
+      await track.applyConstraints({ advanced: [{ whiteBalanceMode: 'continuous' }] });
+    }
+  } catch (e) {
+    console.error('No se pudo recalibrar el balance de blancos:', e);
+  } finally {
+    setTimeout(() => {
+      wbBtn.disabled = false;
+      wbBtn.textContent = '⚪ Balance de blancos automático';
+    }, 800);
+  }
+}
+wbBtn.addEventListener('click', aplicarBalanceBlancos);
+
+async function applyQualityLive() {
+  if (!localStream) return;
+  const q = QUALITY_PRESETS[qualitySelect.value];
+  const track = localStream.getVideoTracks()[0];
+  if (track && track.applyConstraints) {
+    try {
+      await track.applyConstraints({
+        width: { ideal: q.width, min: 640 },
+        height: { ideal: q.height, min: 480 },
+        frameRate: { ideal: 30, min: 24 },
+      });
+    } catch (e) {
+      console.warn('No se pudo cambiar la resolución en vivo, sigue con la anterior:', e);
+    }
+  }
+
+  for (const { videoSender } of peerConnections.values()) {
+    if (videoSender) await applyEncodingParams(videoSender, q.bitrate);
+  }
+}
+qualitySelect.addEventListener('change', () => {
+  applyQualityLive();
+  persistirAjustes({ quality: qualitySelect.value });
+});
+
+function aplicarControlRemoto(s) {
+
+  try {
+    if (s.quality && QUALITY_PRESETS[s.quality] && qualitySelect.value !== s.quality) {
+      qualitySelect.value = s.quality;
+      applyQualityLive();
+      persistirAjustes({ quality: s.quality });
+    }
+  } catch (e) { console.error('control remoto (quality) falló:', e); }
+
+  try {
+    if (s.stab && Object.prototype.hasOwnProperty.call(STAB_PRESETS, s.stab) && stabSelect.value !== s.stab) {
+      stabSelect.value = s.stab;
+      STAB.cfg = STAB_PRESETS[s.stab];
+      persistirAjustes({ stab: s.stab });
+    }
+  } catch (e) { console.error('control remoto (stab) falló:', e); }
+
+  try {
+    let colorTocado = false;
+    if (s.brightness != null) { brightRange.value = s.brightness; colorTocado = true; }
+    if (s.contrast != null) { contrastRange.value = s.contrast; colorTocado = true; }
+    if (s.saturation != null) { satRange.value = s.saturation; colorTocado = true; }
+    if (colorTocado) { updateColorLabels(); persistirColorActual(); }
+  } catch (e) { console.error('control remoto (color) falló:', e); }
+
+  try {
+    if (s.focusDistance != null && focusRangeReal) {
+      focusRange.value = s.focusDistance;
+      aplicarEnfoque(s.focusDistance);
+      persistirAjustes({ focusDistance: s.focusDistance });
+    }
+  } catch (e) { console.error('control remoto (enfoque) falló:', e); }
+
+  try {
+    if (s.exposure != null && expoRangeReal) {
+      expoRange.value = s.exposure;
+      aplicarExposicion(s.exposure);
+      persistirAjustes({ exposure: s.exposure });
+    }
+  } catch (e) { console.error('control remoto (exposición) falló:', e); }
+
+  try {
+    if (s.whiteBalance === 'auto') aplicarBalanceBlancos();
+  } catch (e) { console.error('control remoto (balance de blancos) falló:', e); }
+}
+
+stabSelect.addEventListener('change', () => {
+  STAB.cfg = STAB_PRESETS[stabSelect.value];
+  persistirAjustes({ stab: stabSelect.value });
+});
+
+async function makeOffer(receiverId) {
+  const anterior = peerConnections.get(receiverId);
+  if (anterior) anterior.pc.close();
+
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  });
+
+  const q = QUALITY_PRESETS[qualitySelect.value];
+  let videoSender = null;
+  outStream.getTracks().forEach((t) => {
+    const sender = pc.addTrack(t, outStream);
+    if (t.kind === 'video') videoSender = sender;
+  });
+  peerConnections.set(receiverId, { pc, videoSender });
+
+  const transceiver = pc.getTransceivers().find((t) => t.sender === videoSender);
+  if (transceiver) preferH264(transceiver);
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      ws.send(JSON.stringify({ type: 'ice', id: camId, from: 'sender', candidate: e.candidate, receiverId }));
+    }
+  };
+  pc.onconnectionstatechange = () => {
+    statusEl.textContent = `estado (${peerConnections.size} viendo): ${pc.connectionState}`;
+
+    if (pc.connectionState === 'failed' && transmitiendo && !reintentandoOferta.has(receiverId)) {
+      reintentandoOferta.add(receiverId);
+      setTimeout(() => {
+        reintentandoOferta.delete(receiverId);
+        if (transmitiendo && peerConnections.get(receiverId) && peerConnections.get(receiverId).pc === pc) {
+          makeOffer(receiverId).catch((e) => console.error('reintento de oferta falló:', e));
+        }
+      }, 1500);
+    }
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  if (videoSender) await applyEncodingParams(videoSender, q.bitrate);
+
+  ws.send(JSON.stringify({ type: 'offer', id: camId, sdp: offer.sdp, receiverId }));
+  statusEl.textContent = 'oferta enviada, esperando respuesta...';
+
+  startStatsLoop();
+}
+
+function startStatsLoop() {
+  if (statsInterval) clearInterval(statsInterval);
+  statsInterval = setInterval(async () => {
+
+    const primero = peerConnections.values().next().value;
+    if (!primero) return;
+    const { pc } = primero;
+    const stats = await pc.getStats();
+    stats.forEach((r) => {
+      if (r.type === 'outbound-rtp' && r.kind === 'video') {
+        const kbps = r.bytesSent ? Math.round((r.bytesSent * 8) / 1000 / (r.timestamp / 1000 || 1)) : 0;
+        statsEl.textContent = `enviando: ${r.frameWidth || '?'}x${r.frameHeight || '?'} @ ${r.framesPerSecond || '?'}fps · codec: ${r.codecId || '-'}`;
+      }
+    });
+  }, 2000);
+}
+
+function updateColorLabels() {
+  brightVal.textContent = brightRange.value + '%';
+  contrastVal.textContent = contrastRange.value + '%';
+  satVal.textContent = satRange.value + '%';
+}
+[brightRange, contrastRange, satRange].forEach((el) => el.addEventListener('input', updateColorLabels));
+function persistirColorActual() {
+  persistirAjustes({
+    brightness: Number(brightRange.value),
+    contrast: Number(contrastRange.value),
+    saturation: Number(satRange.value),
+  });
+}
+
+[brightRange, contrastRange, satRange].forEach((el) => el.addEventListener('change', persistirColorActual));
+colorResetBtn.addEventListener('click', () => {
+  brightRange.value = 100;
+  contrastRange.value = 100;
+  satRange.value = 100;
+  updateColorLabels();
+  persistirColorActual();
+});
+updateColorLabels();
+
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  try {
+    await startCamera();
+    await connectSignaling();
+    transmitiendo = true;
+    stopBtn.disabled = false;
+    try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  } catch (e) {
+    statusEl.textContent = 'error: ' + e.message;
+    startBtn.disabled = false;
+  }
+});
+
+stopBtn.addEventListener('click', () => {
+  transmitiendo = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  if (statsInterval) clearInterval(statsInterval);
+  for (const { pc } of peerConnections.values()) pc.close();
+  peerConnections.clear();
+  reintentandoOferta.clear();
+  if (ws) ws.close();
+  if (localStream) localStream.getTracks().forEach((t) => t.stop());
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  statusEl.textContent = 'detenido';
+  statsEl.textContent = '-';
+});
+
+let wakeLock = null;
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && startBtn.disabled) {
+    try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+});
+
+</script>
+</body>
+</html>

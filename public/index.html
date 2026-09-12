@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OBS Dual iPhone Cam</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #0b0b0b;
+    color: #fff;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 24px 16px 60px;
+  }
+  h1 { font-size: 22px; }
+  p { color: #aaa; font-size: 14px; line-height: 1.5; }
+  .card {
+    background: #161616;
+    border-radius: 10px;
+    padding: 14px;
+    margin: 10px 0;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 14px; color: #9ad; text-transform: uppercase; letter-spacing: .03em; }
+  .card a {
+    display: block;
+    color: #fff;
+    text-decoration: none;
+    font: 14px ui-monospace, monospace;
+    background: #222;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin: 4px 0;
+    word-break: break-all;
+  }
+  .card a:active { background: #2b7de9; }
+  .hint { font-size: 11px; color: #666; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <h1>📷 OBS Dual iPhone Cam</h1>
+  <p>
+    Enlaces directos al estudio (donde se crean las cámaras, cada una con
+    su PIN) y al receiver para OBS.
+  </p>
+
+  <div class="card">
+    <h3>1. Estudio — crear cámaras y ver sus PIN</h3>
+    <div id="studioLink"></div>
+    <div class="hint">
+      Ahí añades cada cámara (botón "+"), le pones nombre y consigues su
+      PIN de 4 dígitos — es lo que hay que pasarle a quien sostenga cada
+      iPhone. También ajustas calidad/color/estabilización a distancia y
+      activas el túnel de Cloudflare si necesitas acceso desde otra red.
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>2. En cada iPhone (Safari)</h3>
+    <div id="senderLink"></div>
+    <div class="hint">
+      Misma URL para todos los iPhones — cada uno se identifica metiendo
+      el PIN de SU cámara (no hay ningún atajo por parámetro en la URL,
+      quitado a propósito por seguridad). Safari va a avisar "conexión no
+      privada" — toca "Mostrar detalles" → "Visitar sitio web" (es tu
+      propio servidor, normal).
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3. En OBS (fuente "Navegador")</h3>
+    <div id="receiverLink"></div>
+    <div class="hint">Pega esa URL en la fuente Navegador de OBS. Clic derecho → "Interactuar" → ⚙ para elegir qué cámaras mostrar (se detectan solas).</div>
+  </div>
+
+  <footer style="text-align:center; font-size:11px; color:#555; margin-top:24px;">
+    <a href="https://github.com/nicolasierra/obs-dual-iphone-cam" style="color:#678;">obs-dual-iphone-cam</a>
+    por <a href="https://github.com/nicolasierra" style="color:#678;">Nicolás Sierra</a>
+  </footer>
+
+<script>
+
+const host = location.hostname;
+const HTTPS_PORT = 8443;
+const HTTP_PORT = 8080;
+
+function crearEnlace(contenedorId, url) {
+  const el = document.getElementById(contenedorId);
+  el.innerHTML = '';
+  const a = document.createElement('a');
+  a.href = url;
+  a.textContent = url;
+  a.target = '_blank';
+  el.appendChild(a);
+}
+
+crearEnlace('studioLink', `${origenHttp()}/studio.html`);
+crearEnlace('senderLink', `https://${host}:${HTTPS_PORT}/sender.html`);
+crearEnlace('receiverLink', `${origenHttp()}/receiver.html`);
+
+function origenHttp() {
+  return `http://${host}:${HTTP_PORT}`;
+}
+</script>
+</body>
+</html>

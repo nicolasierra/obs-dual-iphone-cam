@@ -1,0 +1,5 @@
+node_modules/
+certs/
+cameras.json
+camera-names.json
+.DS_Store

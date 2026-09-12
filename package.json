@@ -1,0 +1,22 @@
+{
+  "name": "obs-dual-iphone-cam",
+  "version": "1.0.0",
+  "description": "Usa 2 (o más) iPhones como cámaras en OBS vía WebRTC, sin apps de pago, con estabilización digital basada en giroscopio.",
+  "main": "server.js",
+  "author": {
+    "name": "Nicolás Sierra",
+    "url": "https://github.com/nicolasierra"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nicolasierra/obs-dual-iphone-cam.git"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "selfsigned": "^2.4.1",
+    "ws": "^8.16.0"
+  }
+}
